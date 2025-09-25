@@ -21,7 +21,7 @@ class Patient:
     def __repr__(self):
         return (f"Patient(ID={self.donor_id}, APOE={self.apoe}, "
                 f"Onset={self.age_onset}, Diagnosis={self.age_diag}, "
-                f"Sex={self.sex}), Education={self.years_education}")
+                f"Sex={self.sex}, Education={self.years_education})")
 
 
 # ---------- Helpers ----------
@@ -47,8 +47,7 @@ def _clean_missing(val):
 
 def _clean_number_like(val):
     """
-    Parse numbers: '81.0' -> '81' for display; but we return as float for analysis.
-    Returns float or None.
+    Parse numbers: '81.0' -> 81.0 (float). Returns float or None.
     """
     v = _clean_missing(val)
     if v is None:
@@ -73,7 +72,7 @@ def load_patients_from_csv(filepath="NO DATE GENOTYPE Metadata (1).csv"):
 
         # Resolve columns robustly (tolerate spacing/case variations)
         donor_col = _resolve(headers, ["donorid", "donor_id", "id", "donoridnumber"])
-        apoe_col  = _resolve(headers, ["apoegenotype", "apoe", "apoe_genotype", "apoegenotype", "apoe(genotype)"])
+        apoe_col  = _resolve(headers, ["apoegenotype", "apoe", "apoe_genotype", "apoe(genotype)"])
         onset_col = _resolve(headers, ["ageofonsetcognitivesymptoms", "ageofonset", "onsetage", "ageatcognitivesymptomonset"])
         diag_col  = _resolve(headers, ["ageofdementiadiagnosis", "ageatdiagnosis", "diagnosisage"])
         sex_col   = _resolve(headers, ["sex", "gender"])
@@ -118,7 +117,8 @@ def print_transformed_data():
         group = apoe_group_label(p.apoe)
         # Align group label for readability
         pad = "\t" if group == "E4 Present" else "\t"
-        print(f"{p.donor_id or ''}\t{group}{pad}{int(p.age_onset) if p.age_onset.is_integer() else p.age_onset}")
+        age_disp = int(p.age_onset) if (p.age_onset is not None and float(p.age_onset).is_integer()) else p.age_onset
+        print(f"{p.donor_id or ''}\t{group}{pad}{age_disp}")
 
 def analyze_and_plot():
     """
@@ -147,17 +147,15 @@ def analyze_and_plot():
     # Means
     mean_present = sum(e4_present) / len(e4_present)
     mean_not = sum(e4_not_present) / len(e4_not_present)
+
     # Standard error of mean
     sem_present = np.std(e4_present, ddof=1) / np.sqrt(len(e4_present))
     sem_not = np.std(e4_not_present, ddof=1) / np.sqrt(len(e4_not_present))
 
-
-
-    # --- Bar plot with two bars (no specific colors per instruction constraints) ---
+    # --- Bar plot with two bars (no specific colors) ---
     labels = ["E4 Present", "E4 Not Present"]
     means = [mean_present, mean_not]
     errors = [sem_present, sem_not]
-    
 
     plt.figure()
     plt.bar(labels, means, yerr=errors, capsize=5)
@@ -165,6 +163,8 @@ def analyze_and_plot():
     plt.title("APOE (Grouped) vs Age of Onset")
     plt.tight_layout()
     plt.show()
+
+    # --- Student's t-test (Welch) ---
     tval, pval = stats.ttest_ind(e4_present, e4_not_present, equal_var=False)
 
     print("\n--- Statistical Comparison (Student's t-test, Welch) ---")
@@ -176,9 +176,14 @@ def analyze_and_plot():
         print("Result: Statistically significant difference at α = 0.05")
     else:
         print("Result: Not statistically significant at α = 0.05")
-# Scatterplot
-#%%
+
+
+# ---------- Scatter + Linear Regression ----------
 def plot_education_vs_onset():
+    """
+    Scatter of Years of Education vs. Age of Onset with a linear regression line.
+    Prints slope, intercept, R^2, p-value, and std error.
+    """
     x = []  # years of education
     y = []  # age of onset
 
@@ -186,20 +191,47 @@ def plot_education_vs_onset():
         if p.years_education is not None and p.age_onset is not None:
             x.append(p.years_education)
             y.append(p.age_onset)
+
     if len(x) == 0:
         print("No data available for education vs. onset.")
         return
 
+    # Need at least 2 points for a regression
+    if len(x) < 2:
+        print("Not enough points for regression (need at least 2).")
+        return
+
+    x = np.array(x, dtype=float)
+    y = np.array(y, dtype=float)
+
+    # --- Linear regression ---
+    slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+    # Use a smooth line across the span of x for nicer display
+    x_line = np.linspace(x.min(), x.max(), 200)
+    y_line = slope * x_line + intercept
+    r2 = r_value ** 2
+
+    # --- Plot scatter + regression line ---
     plt.figure()
-    plt.scatter(x, y)
+    plt.scatter(x, y, label="Data")
+    plt.plot(x_line, y_line, label=f"Fit: y = {slope:.2f}x + {intercept:.2f}")
     plt.xlabel("Years of Education")
-    plt.ylabel("Age of Onset")
-    plt.title("Education vs. Age of Onset")
+    plt.ylabel("Age of Onset (years)")
+    plt.title("Education vs. Age of Onset (with Linear Regression)")
+    plt.legend()
+    # Put R^2 on the plot
+    plt.text(0.05, 0.95, f"$R^2$ = {r2:.3f}", transform=plt.gca().transAxes,
+             ha="left", va="top")
     plt.tight_layout()
     plt.show()
 
- # --- Student's t-test (Welch's version: robust to unequal variances) ---
- #%%
+    # --- Report stats ---
+    print("\n--- Linear Regression: Education vs. Age of Onset ---")
+    print(f"Slope = {slope:.4f}")
+    print(f"Intercept = {intercept:.4f}")
+    print(f"R-squared = {r2:.4f}")
+
+
 # ---------- Run everything ----------
 if __name__ == "__main__":
     # 1) Load patients from the provided CSV, skipping rows with no onset age
@@ -211,4 +243,5 @@ if __name__ == "__main__":
     # 3) Make two-bar plot and run t-test
     analyze_and_plot()
 
+    # 4) Scatter + regression with R^2
     plot_education_vs_onset()
